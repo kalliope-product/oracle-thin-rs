@@ -1,0 +1,15 @@
+services:
+  db:
+    image: container-registry-seoul.oracle.com/database/free:latest-lite
+    container_name: oracle-xe
+    ports:
+      - "1521:1521"
+    environment:
+      - ORACLE_PWD=ThisIsASecret123
+      - ORACLE_CHARACTERSET=AL32UTF8
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      - ./ora-init-scripts:/opt/oracle/scripts/startup
+
+volumes:
+  oracle-data:
