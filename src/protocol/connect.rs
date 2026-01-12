@@ -11,6 +11,7 @@ use crate::protocol::messages::{
 use crate::protocol::packet::{Capabilities, Packet, PacketStream};
 use base64::Engine;
 use rand::RngCore;
+use std::time::Duration;
 
 /// Connection parameters.
 #[derive(Debug, Clone)]
@@ -23,6 +24,8 @@ pub struct ConnectParams {
     pub service_name: String,
     /// SDU (Session Data Unit) size.
     pub sdu: u32,
+    /// TCP connection timeout (default: 20 seconds, matching python-oracledb).
+    pub connect_timeout: Duration,
 }
 
 impl ConnectParams {
@@ -33,17 +36,39 @@ impl ConnectParams {
             port,
             service_name: service_name.into(),
             sdu: TNS_SDU_DEFAULT,
+            connect_timeout: Duration::from_secs(20), // Python default
         }
+    }
+
+    /// Set the connection timeout.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - The maximum time to wait for TCP connection establishment
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use oracle_thin_rs::ConnectParams;
+    /// use std::time::Duration;
+    ///
+    /// let params = ConnectParams::new("localhost", 1521, "ORCL")
+    ///     .with_connect_timeout(Duration::from_secs(5));
+    /// ```
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
     }
 
     /// Parse a connection string like "host:port/service_name".
     pub fn parse(conn_str: &str) -> Result<Self> {
         // Format: host:port/service_name or host/service_name (default port 1521)
-        let (addr_part, service_name) = conn_str.split_once('/').ok_or_else(|| {
-            Error::InvalidConnectString {
-                message: "Expected format: host:port/service_name".to_string(),
-            }
-        })?;
+        let (addr_part, service_name) =
+            conn_str
+                .split_once('/')
+                .ok_or_else(|| Error::InvalidConnectString {
+                    message: "Expected format: host:port/service_name".to_string(),
+                })?;
 
         let (host, port) = if let Some((h, p)) = addr_part.split_once(':') {
             let port = p.parse::<u16>().map_err(|_| Error::InvalidConnectString {
@@ -164,9 +189,7 @@ fn handle_accept(packet: Packet, stream: &mut PacketStream, caps: &mut Capabilit
     // Read NSI flags
     let nsi_flags1 = buf.read_u8()?;
     if (nsi_flags1 & TNS_NSI_NA_REQUIRED) != 0 {
-        return Err(Error::protocol(
-            "Native Network Encryption not supported",
-        ));
+        return Err(Error::protocol("Native Network Encryption not supported"));
     }
 
     // Skip more fields
@@ -201,9 +224,7 @@ fn handle_accept(packet: Packet, stream: &mut PacketStream, caps: &mut Capabilit
 pub async fn send_reset_marker(stream: &mut PacketStream) -> Result<()> {
     // RESET marker packet: type=12 (MARKER), payload=[01, 00, 02]
     let msg = MarkerMessage::reset();
-    stream
-        .send_message(TNS_PACKET_TYPE_MARKER, &msg)
-        .await?;
+    stream.send_message(TNS_PACKET_TYPE_MARKER, &msg).await?;
     Ok(())
 }
 
@@ -297,7 +318,9 @@ pub async fn fast_auth(
                 let mut banner = Vec::new();
                 loop {
                     let b = rbuf.read_u8()?;
-                    if b == 0 { break; }
+                    if b == 0 {
+                        break;
+                    }
                     banner.push(b);
                 }
 
@@ -327,7 +350,9 @@ pub async fn fast_auth(
                 // Skip data types response
                 loop {
                     let data_type = rbuf.read_u16_be()?;
-                    if data_type == 0 { break; }
+                    if data_type == 0 {
+                        break;
+                    }
                     let conv_data_type = rbuf.read_u16_be()?;
                     if conv_data_type != 0 {
                         rbuf.skip(4)?;
@@ -381,19 +406,19 @@ pub async fn fast_auth(
                 let _call_status = rbuf.read_ub4()?;
                 let _end_to_end_seq = rbuf.read_ub2()?;
                 let _row_number = rbuf.read_ub4()?;
-                let _error_num_hint = rbuf.read_ub2()?;  // Not the real error number
+                let _error_num_hint = rbuf.read_ub2()?; // Not the real error number
                 let _array_elem_err1 = rbuf.read_ub2()?;
                 let _array_elem_err2 = rbuf.read_ub2()?;
                 let _cursor_id = rbuf.read_ub2()?;
-                let _error_pos = rbuf.read_ub2()?;  // Actually sb2 but we just skip
-                rbuf.skip(4)?;  // sql_type, fatal, flags x2
-                // Skip rowid (variable length)
+                let _error_pos = rbuf.read_ub2()?; // Actually sb2 but we just skip
+                rbuf.skip(4)?; // sql_type, fatal, flags x2
+                               // Skip rowid (variable length)
                 let rowid_len = rbuf.read_u8()?;
                 if rowid_len > 0 && rowid_len != 0xFF {
                     rbuf.skip(rowid_len as usize)?;
                 }
                 let _os_error = rbuf.read_ub4()?;
-                rbuf.skip(4)?;  // stmt_num, call_num, padding
+                rbuf.skip(4)?; // stmt_num, call_num, padding
                 let _success_iters = rbuf.read_ub4()?;
                 let oerrdd_len = rbuf.read_ub4()?;
                 if oerrdd_len > 0 {
@@ -407,7 +432,7 @@ pub async fn fast_auth(
                         if first_byte == 0xFE {
                             rbuf.skip_ub4()?;
                         }
-                        rbuf.skip(2)?;  // error code
+                        rbuf.skip(2)?; // error code
                     }
                     if first_byte == 0xFE {
                         rbuf.skip(1)?;
@@ -427,7 +452,10 @@ pub async fn fast_auth(
                 if actual_error_num != 0 {
                     // There's a real error - read the message
                     let message = rbuf.read_str_with_length()?.unwrap_or_default();
-                    return Err(Error::Oracle { code: actual_error_num, message });
+                    return Err(Error::Oracle {
+                        code: actual_error_num,
+                        message,
+                    });
                 }
                 // No error - continue processing
             }
@@ -452,7 +480,8 @@ async fn read_data_packet(stream: &mut PacketStream, caps: &mut Capabilities) ->
             TNS_PACKET_TYPE_CONTROL => {
                 // Handle control packet
                 if response.payload.len() >= 2 {
-                    let control_type = u16::from_be_bytes([response.payload[0], response.payload[1]]);
+                    let control_type =
+                        u16::from_be_bytes([response.payload[0], response.payload[1]]);
                     if control_type == 9 {
                         // TNS_CONTROL_TYPE_RESET_OOB
                         caps.supports_oob = false;
@@ -494,7 +523,9 @@ pub async fn exchange_data_types(stream: &mut PacketStream, caps: &mut Capabilit
         let mut banner = Vec::new();
         loop {
             let b = rbuf.read_u8()?;
-            if b == 0 { break; }
+            if b == 0 {
+                break;
+            }
             banner.push(b);
         }
 
@@ -508,7 +539,6 @@ pub async fn exchange_data_types(stream: &mut PacketStream, caps: &mut Capabilit
 
         let fdo_length = rbuf.read_u16_be()?;
         rbuf.skip(fdo_length as usize)?;
-
 
         if let Some(server_compile_caps) = rbuf.read_bytes_with_length()? {
             // TODO: Handle server_compile_caps.len() > 7 case if needed
@@ -545,7 +575,9 @@ pub async fn exchange_data_types(stream: &mut PacketStream, caps: &mut Capabilit
     // Parse data types array - skip data type entries until we hit 0
     loop {
         let data_type = rbuf.read_u16_be()?;
-        if data_type == 0 { break; }
+        if data_type == 0 {
+            break;
+        }
         let conv_data_type = rbuf.read_u16_be()?;
         if conv_data_type != 0 {
             rbuf.skip(4)?;
@@ -557,4 +589,3 @@ pub async fn exchange_data_types(stream: &mut PacketStream, caps: &mut Capabilit
     }
     Ok(())
 }
-

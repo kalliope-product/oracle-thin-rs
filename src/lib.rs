@@ -37,7 +37,7 @@ pub mod protocol;
 
 // Re-export main types
 pub use connection::{Connection, QueryResult};
-pub use cursor::{CollectedRows, Cursor};
+pub use cursor::{Cursor, CursorStreamExt, RowCursor};
 pub use error::{Error, Result};
 pub use protocol::connect::ConnectParams;
 pub use protocol::types::{Column, ColumnInfo, ColumnMetadata, OracleType, OracleValue, Row};

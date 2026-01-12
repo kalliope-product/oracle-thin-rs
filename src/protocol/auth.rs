@@ -121,9 +121,7 @@ async fn handle_marker_and_get_error(
 
     // Send reset marker to recover (zero-copy)
     let msg = MarkerMessage::reset();
-    stream
-        .send_message(TNS_PACKET_TYPE_MARKER, &msg)
-        .await?;
+    stream.send_message(TNS_PACKET_TYPE_MARKER, &msg).await?;
 
     // Read packets until we get a reset marker back
     loop {
@@ -183,7 +181,9 @@ async fn handle_marker_and_get_error(
         // Continue loop to skip marker packets
     }
 
-    Err(Error::protocol("Protocol error: received break marker but couldn't retrieve error"))
+    Err(Error::protocol(
+        "Protocol error: received break marker but couldn't retrieve error",
+    ))
 }
 
 /// Marker type constants
@@ -207,9 +207,7 @@ async fn handle_marker_and_get_error_phase2(
 
     // Send reset marker to recover (zero-copy)
     let msg = MarkerMessage::reset();
-    stream
-        .send_message(TNS_PACKET_TYPE_MARKER, &msg)
-        .await?;
+    stream.send_message(TNS_PACKET_TYPE_MARKER, &msg).await?;
 
     // Read packets until we get a DATA packet with the error
     for _attempts in 0..10 {
@@ -239,7 +237,9 @@ async fn handle_marker_and_get_error_phase2(
         }
     }
 
-    Err(Error::protocol("Authentication failed: received break marker but couldn't retrieve error"))
+    Err(Error::protocol(
+        "Authentication failed: received break marker but couldn't retrieve error",
+    ))
 }
 
 /// Authentication phase 2: Send verifier.
@@ -364,23 +364,22 @@ fn generate_12c_verifier(
         hex_to_bytes(server_sesskey).ok_or_else(|| Error::protocol("Invalid AUTH_SESSKEY hex"))?;
     let session_key_part_a = decrypt_cbc(&password_hash, &server_sesskey_bytes);
 
-
     // Generate client's session key part (same length as part_a)
     let session_key_part_b = random_bytes(session_key_part_a.len());
     let encrypted_client_key = encrypt_cbc(&password_hash, &session_key_part_b, false);
 
     // Session key is first 32 bytes of encrypted client key as hex (64 chars)
     // Python: self.session_key = encoded_client_key.hex().upper()[:64]
-    let session_key = bytes_to_hex_upper(&encrypted_client_key[..32.min(encrypted_client_key.len())]);
-
+    let session_key =
+        bytes_to_hex_upper(&encrypted_client_key[..32.min(encrypted_client_key.len())]);
 
     // Derive combo key using PBKDF2
     let csk_salt = session
         .params
         .get("AUTH_PBKDF2_CSK_SALT")
         .ok_or_else(|| Error::protocol("Missing AUTH_PBKDF2_CSK_SALT"))?;
-    let csk_salt_bytes =
-        hex_to_bytes(csk_salt).ok_or_else(|| Error::protocol("Invalid AUTH_PBKDF2_CSK_SALT hex"))?;
+    let csk_salt_bytes = hex_to_bytes(csk_salt)
+        .ok_or_else(|| Error::protocol("Invalid AUTH_PBKDF2_CSK_SALT hex"))?;
     let sder_count_str = session
         .params
         .get("AUTH_PBKDF2_SDER_COUNT")
@@ -406,7 +405,6 @@ fn generate_12c_verifier(
     // Python takes first 80 bytes -> 160 hex chars
     let speedy_key = bytes_to_hex_upper(&speedy_encrypted[..80.min(speedy_encrypted.len())]);
 
-
     // Store combo key for later password encryption
     session.combo_key = Some(combo_key.clone());
 
@@ -419,7 +417,6 @@ fn generate_12c_verifier(
     password_with_salt.extend_from_slice(password);
     let encrypted_password = encrypt_cbc(&combo_key, &password_with_salt, false);
     let encoded_password = bytes_to_hex_upper(&encrypted_password);
-
 
     Ok((session_key, Some(speedy_key), encoded_password))
 }
@@ -448,7 +445,8 @@ fn generate_11g_verifier(
     // Generate client's session key part
     let session_key_part_b = random_bytes(session_key_part_a.len());
     let encrypted_client_key = encrypt_cbc(&password_hash, &session_key_part_b, false);
-    let session_key = bytes_to_hex_upper(&encrypted_client_key[..48.min(encrypted_client_key.len())]);
+    let session_key =
+        bytes_to_hex_upper(&encrypted_client_key[..48.min(encrypted_client_key.len())]);
 
     // Derive combo key using MD5
     let key_len = 24;
@@ -485,7 +483,6 @@ pub fn parse_auth_response(payload: Bytes) -> Result<SessionData> {
 
     // Read message type
     let msg_type = buf.read_u8()?;
-
 
     // Handle different message types
     match msg_type {
@@ -529,7 +526,6 @@ pub fn parse_auth_response(payload: Bytes) -> Result<SessionData> {
                     }
                 };
 
-
                 if key == "AUTH_VFR_DATA" {
                     // Read verifier type - stored in flags field
                     if let Ok(verifier_type) = buf.read_ub4() {
@@ -544,7 +540,11 @@ pub fn parse_auth_response(payload: Bytes) -> Result<SessionData> {
 
                 // Skip keys with null terminators in the middle (binary data)
                 let clean_key = key.trim_end_matches('\0').to_string();
-                if !clean_key.is_empty() && clean_key.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) {
+                if !clean_key.is_empty()
+                    && clean_key
+                        .chars()
+                        .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+                {
                     session.params.insert(clean_key, value);
                 }
             }
@@ -614,7 +614,10 @@ fn parse_error(buf: &mut ReadBuffer) -> Result<Error> {
         // Try to extract error code from ORA-XXXXX
         let code = if msg_bytes.len() > 4 {
             let code_str = &msg_bytes[4..];
-            let code_end = code_str.iter().position(|&b| b == b':').unwrap_or(code_str.len());
+            let code_end = code_str
+                .iter()
+                .position(|&b| b == b':')
+                .unwrap_or(code_str.len());
             std::str::from_utf8(&code_str[..code_end])
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())

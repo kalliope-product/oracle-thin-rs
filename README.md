@@ -13,11 +13,13 @@ Sometime I just wish I have some simple way to get and update data in Oracle Dat
 
 ### Implemented
 - **Connection**: TCP connection with O5LOGON authentication (11g SHA1 and 12c PBKDF2+SHA512 verifiers)
-- **Query Execution**: SELECT statements with prefetch and cursor-based fetching
-- **Data Types**: VARCHAR2, NUMBER, CHAR, LONG, BINARY_INTEGER, NULL values
+- **Query Execution**: SELECT statements with automatic prefetch
+- **Cursor-based Fetching**: Trait-based cursor API for streaming large result sets
+- **Stream Support**: `futures::Stream` integration with combinators
+- **Data Types**: VARCHAR2, NUMBER, CHAR, DATE, LONG, BINARY_INTEGER, NULL values
 
 ### Planned
-- DATE/TIMESTAMP types
+- TIMESTAMP types (TIMESTAMP, TIMESTAMP WITH TZ, etc.)
 - RAW/BLOB/CLOB types
 - DML operations (INSERT, UPDATE, DELETE)
 - Bind variables
@@ -33,7 +35,8 @@ Sometime I just wish I have some simple way to get and update data in Oracle Dat
 ## Quick Start
 
 ```rust
-use oracle_thin_rs::Connection;
+use oracle_thin_rs::{Connection, Cursor, CursorStreamExt};
+use futures::stream::TryStreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "password"
     ).await?;
 
-    // Simple query
+    // Simple query - all results at once
     let result = conn.query("SELECT * FROM employees WHERE rownum < 10").await?;
 
     println!("Columns: {:?}", result.column_names());
@@ -54,9 +57,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Cursor-based fetching for large result sets
     let mut cursor = conn.open_cursor("SELECT * FROM large_table").await?;
-    while let Some(row) = conn.next_row(&mut cursor).await? {
+    while let Some(row) = cursor.next().await? {
         // Process row
     }
+
+    // Stream-based processing with combinators
+    let mut cursor = conn.open_cursor("SELECT * FROM large_table").await?;
+    let rows: Vec<_> = cursor.into_stream().try_collect().await?;
+    println!("Fetched {} rows", rows.len());
 
     conn.close().await?;
     Ok(())

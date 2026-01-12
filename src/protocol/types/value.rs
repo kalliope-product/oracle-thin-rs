@@ -1,5 +1,6 @@
 //! Oracle value types for query results.
 
+use chrono::NaiveDateTime;
 use std::fmt;
 
 /// Oracle value enum representing a single column value.
@@ -12,6 +13,8 @@ pub enum OracleValue {
     /// Number value as string (preserves precision).
     /// Can be converted to i64/f64 as needed.
     Number(String),
+    /// Date/time value (DATE type).
+    Date(NaiveDateTime),
 }
 
 impl OracleValue {
@@ -25,7 +28,7 @@ impl OracleValue {
         match self {
             OracleValue::String(s) => Some(s),
             OracleValue::Number(s) => Some(s),
-            OracleValue::Null => None,
+            _ => None,
         }
     }
 
@@ -44,6 +47,14 @@ impl OracleValue {
             _ => None,
         }
     }
+
+    /// Try to get the value as a NaiveDateTime.
+    pub fn as_date(&self) -> Option<NaiveDateTime> {
+        match self {
+            OracleValue::Date(dt) => Some(*dt),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for OracleValue {
@@ -52,6 +63,7 @@ impl fmt::Display for OracleValue {
             OracleValue::Null => write!(f, "NULL"),
             OracleValue::String(s) => write!(f, "{}", s),
             OracleValue::Number(n) => write!(f, "{}", n),
+            OracleValue::Date(dt) => write!(f, "{}", dt.format("%Y-%m-%d %H:%M:%S")),
         }
     }
 }

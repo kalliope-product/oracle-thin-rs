@@ -81,8 +81,7 @@ pub fn decrypt_cbc(key: &[u8], ciphertext: &[u8]) -> Vec<u8> {
 /// Derive a key using PBKDF2 with SHA-512.
 pub fn derive_key_pbkdf2(password: &[u8], salt: &[u8], length: usize, iterations: u32) -> Vec<u8> {
     let mut key = vec![0u8; length];
-    pbkdf2::<Hmac<Sha512>>(password, salt, iterations, &mut key)
-        .expect("PBKDF2 failed");
+    pbkdf2::<Hmac<Sha512>>(password, salt, iterations, &mut key).expect("PBKDF2 failed");
     key
 }
 
@@ -120,10 +119,7 @@ pub fn random_bytes(len: usize) -> Vec<u8> {
 
 /// Convert bytes to uppercase hex string.
 pub fn bytes_to_hex_upper(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|b| format!("{:02X}", b))
-        .collect()
+    bytes.iter().map(|b| format!("{:02X}", b)).collect()
 }
 
 /// Convert hex string to bytes.

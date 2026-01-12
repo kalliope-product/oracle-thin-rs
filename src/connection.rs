@@ -1,16 +1,16 @@
 //! High-level Connection API for Oracle thin client.
 
-use crate::cursor::{CollectedRows, Cursor};
+use crate::cursor::{Cursor, RowCursor};
 use crate::error::{Error, Result};
 use crate::protocol::auth::{authenticate, phase_two, AuthCredentials, SessionData};
 use crate::protocol::buffer::ReadBuffer;
 use crate::protocol::connect::{connect, exchange_data_types, fast_auth, ConnectParams};
 use crate::protocol::constants::*;
-use crate::protocol::messages::{
-    ExecuteMessage, FetchMessage, MarkerMessage, TNS_MARKER_TYPE_RESET,
-};
-use crate::protocol::packet::{Capabilities, PacketStream};
-use crate::protocol::response::{parse_execute_response, parse_fetch_response};
+use crate::protocol::message::DataMessage;
+use crate::protocol::message::Message;
+use crate::protocol::messages::{ExecuteMessage, MarkerMessage, TNS_MARKER_TYPE_RESET};
+use crate::protocol::packet::{Capabilities, Packet, PacketStream};
+use crate::protocol::response::parse_execute_response;
 use crate::protocol::types::{ColumnMetadata, Row};
 use tokio::net::TcpStream;
 
@@ -103,11 +103,7 @@ impl Connection {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn connect(
-        conn_str: &str,
-        username: &str,
-        password: &str,
-    ) -> Result<Self> {
+    pub async fn connect(conn_str: &str, username: &str, password: &str) -> Result<Self> {
         // Parse connection string
         let params = ConnectParams::parse(conn_str)?;
 
@@ -120,51 +116,100 @@ impl Connection {
         username: &str,
         password: &str,
     ) -> Result<Self> {
-        // Establish TCP connection
-        let addr = format!("{}:{}", params.host, params.port);
-        let tcp_stream = TcpStream::connect(&addr).await?;
+        use tokio::net::lookup_host;
+        use tokio::time::timeout;
 
-        // Set TCP_NODELAY for immediate packet transmission (matches Python oracledb)
-        tcp_stream.set_nodelay(true)?;
+        // Step 1: DNS resolution with timeout
+        let addr_str = format!("{}:{}", params.host, params.port);
+        let addrs = timeout(params.connect_timeout, lookup_host(&addr_str))
+            .await
+            .map_err(|_| Error::ConnectionTimeout {
+                host: params.host.clone(),
+                port: params.port,
+                timeout: params.connect_timeout,
+            })?
+            .map_err(|e| {
+                // Check if this is a DNS-specific error
+                if e.kind() == std::io::ErrorKind::NotFound
+                    || e.to_string().contains("could not resolve")
+                    || e.to_string().contains("Name or service not known")
+                    || e.to_string().contains("nodename nor servname provided")
+                {
+                    Error::DnsResolutionFailed {
+                        hostname: params.host.clone(),
+                        message: e.to_string(),
+                    }
+                } else {
+                    Error::Io(e)
+                }
+            })?;
 
-        // Create packet stream
-        let mut stream = PacketStream::new(tcp_stream);
+        // Step 2: Try each resolved address with timeout
+        let mut last_error = None;
+        for addr in addrs {
+            match timeout(params.connect_timeout, TcpStream::connect(addr)).await {
+                Ok(Ok(tcp_stream)) => {
+                    // Set TCP_NODELAY for immediate packet transmission (matches Python oracledb)
+                    tcp_stream.set_nodelay(true)?;
 
-        // Initialize capabilities
-        let mut caps = Capabilities::new();
+                    // Create packet stream
+                    let mut stream = PacketStream::new(tcp_stream);
 
-        // Perform TNS connect handshake
-        connect(&mut stream, params, &mut caps).await?;
+                    // Initialize capabilities
+                    let mut caps = Capabilities::new();
 
-        // Note: Python's asyncio implementation also disables OOB (supports_oob = False)
-        // so we don't need to send OOB break + RESET marker after ACCEPT
+                    // Perform TNS connect handshake
+                    connect(&mut stream, params, &mut caps).await?;
 
-        // Create credentials
-        let creds = AuthCredentials::new(username, password);
+                    // Note: Python's asyncio implementation also disables OOB (supports_oob = False)
+                    // so we don't need to send OOB break + RESET marker after ACCEPT
 
-        // Use FastAuth for Oracle 23ai+, otherwise normal auth
-        let session = if caps.supports_fast_auth {
-            // FastAuth combines protocol, data types, and auth phase 1
-            let mut session = fast_auth(&mut stream, &mut caps, &creds).await?;
+                    // Create credentials
+                    let creds = AuthCredentials::new(username, password);
 
-            // Complete authentication with phase 2
-            phase_two(&mut stream, &creds, &caps, &mut session).await?;
+                    // Use FastAuth for Oracle 23ai+, otherwise normal auth
+                    let session = if caps.supports_fast_auth {
+                        // FastAuth combines protocol, data types, and auth phase 1
+                        let mut session = fast_auth(&mut stream, &mut caps, &creds).await?;
 
-            session
-        } else {
-            // Exchange data types first
-            exchange_data_types(&mut stream, &mut caps).await?;
+                        // Complete authentication with phase 2
+                        phase_two(&mut stream, &creds, &caps, &mut session).await?;
 
-            // Then authenticate
-            authenticate(&mut stream, &creds, &caps).await?
-        };
+                        session
+                    } else {
+                        // Exchange data types first
+                        exchange_data_types(&mut stream, &mut caps).await?;
 
-        Ok(Self {
-            stream,
-            caps,
-            session,
-            autocommit: false,
-        })
+                        // Then authenticate
+                        authenticate(&mut stream, &creds, &caps).await?
+                    };
+
+                    return Ok(Self {
+                        stream,
+                        caps,
+                        session,
+                        autocommit: false,
+                    });
+                }
+                Ok(Err(e)) => {
+                    last_error = Some(Error::Io(e));
+                    continue;
+                }
+                Err(_) => {
+                    return Err(Error::ConnectionTimeout {
+                        host: params.host.clone(),
+                        port: params.port,
+                        timeout: params.connect_timeout,
+                    });
+                }
+            }
+        }
+
+        // If we exhausted all addresses without success, return the last error
+        Err(last_error.unwrap_or_else(|| Error::DnsResolutionFailed {
+            hostname: params.host.clone(),
+            message: "No addresses returned".to_string(),
+        }))
     }
 
     /// Check if the connection is alive by sending a ping.
@@ -277,15 +322,14 @@ impl Connection {
         })
     }
 
-    /// Open a cursor for a SELECT query.
+    /// Open a row-by-row cursor for a SELECT query.
     ///
-    /// This returns a Cursor that can be used to iterate over results with
-    /// automatic fetching when the buffer is exhausted.
+    /// The cursor takes exclusive access to the connection until closed.
     ///
     /// # Example
     ///
     /// ```no_run
-    /// use oracle_thin_rs::Connection;
+    /// use oracle_thin_rs::{Connection, Cursor};
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -297,23 +341,29 @@ impl Connection {
     ///
     ///     let mut cursor = conn.open_cursor("SELECT * FROM large_table").await?;
     ///
-    ///     while let Some(row) = conn.next_row(&mut cursor).await? {
+    ///     // Process rows one at a time
+    ///     while let Some(row) = cursor.next().await? {
     ///         println!("{:?}", row);
     ///     }
     ///
     ///     Ok(())
     /// }
     /// ```
-    pub async fn open_cursor(&mut self, sql: &str) -> Result<Cursor> {
-        self.open_cursor_with_fetch_size(sql, 100).await
+    pub async fn open_cursor(&mut self, sql: &str) -> Result<impl Cursor<Item = Row> + '_> {
+        self.open_row_cursor(sql, 100).await
     }
 
-    /// Open a cursor with a specific fetch size.
-    pub async fn open_cursor_with_fetch_size(
+    /// Open a row cursor with a specific fetch size.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - SQL query to execute
+    /// * `fetch_size` - Number of rows to fetch per roundtrip
+    pub async fn open_row_cursor(
         &mut self,
         sql: &str,
         fetch_size: u32,
-    ) -> Result<Cursor> {
+    ) -> Result<impl Cursor<Item = Row> + '_> {
         // Create execute message
         let msg = ExecuteMessage::new_query(sql, fetch_size, self.caps.ttc_field_version);
 
@@ -341,92 +391,15 @@ impl Connection {
             });
         }
 
-        Ok(Cursor::new(
+        Ok(RowCursor::new(
+            self,
             exec_response.columns,
             exec_response.error_info.cursor_id as u32,
             exec_response.rows,
             exec_response.more_rows,
             fetch_size,
+            self.caps.server_ttc_field_version,
         ))
-    }
-
-    /// Fetch more rows into a cursor.
-    ///
-    /// This sends a fetch request to the server and adds the returned rows
-    /// to the cursor's buffer.
-    pub async fn fetch_more(&mut self, cursor: &mut Cursor) -> Result<()> {
-        if !cursor.needs_fetch() {
-            return Ok(());
-        }
-
-        let (cursor_id, fetch_size) = cursor.fetch_params();
-
-        // Create fetch message
-        let msg = FetchMessage::new(cursor_id, fetch_size);
-
-        // Send fetch message
-        self.stream.send_data_message(&msg).await?;
-
-        // Read response
-        let response = self.read_data_response().await?;
-
-        // Parse response
-        let mut buf = ReadBuffer::new(response.payload);
-        let _data_flags = buf.read_u16_be()?;
-
-        let fetch_response =
-            parse_fetch_response(&mut buf, cursor.columns(), self.caps.server_ttc_field_version)?;
-
-        // Check for Oracle errors
-        if fetch_response.error_info.error_num != 0 && fetch_response.error_info.error_num != 1403 {
-            return Err(Error::Oracle {
-                code: fetch_response.error_info.error_num,
-                message: fetch_response.error_info.message.unwrap_or_default(),
-            });
-        }
-
-        // Add rows to cursor
-        cursor.add_rows(fetch_response.rows, fetch_response.more_rows);
-
-        Ok(())
-    }
-
-    /// Get the next row from a cursor, fetching more if needed.
-    ///
-    /// Returns `Ok(None)` when all rows have been consumed.
-    pub async fn next_row(&mut self, cursor: &mut Cursor) -> Result<Option<Row>> {
-        // Try to get from buffer first
-        if let Some(row) = cursor.take_buffered() {
-            return Ok(Some(row));
-        }
-
-        // Need to fetch more?
-        if cursor.needs_fetch() {
-            self.fetch_more(cursor).await?;
-            return Ok(cursor.take_buffered());
-        }
-
-        // No more rows
-        Ok(None)
-    }
-
-    /// Fetch all remaining rows from a cursor.
-    ///
-    /// This will make multiple fetch requests to the server until all rows
-    /// are retrieved.
-    pub async fn fetch_all(&mut self, cursor: &mut Cursor) -> Result<CollectedRows> {
-        let mut all_rows = cursor.collect_buffered();
-
-        while cursor.needs_fetch() {
-            self.fetch_more(cursor).await?;
-            all_rows.extend(cursor.drain_buffer());
-        }
-
-        Ok(CollectedRows {
-            columns: cursor.columns().to_vec(),
-            rows: all_rows,
-            total_rows: cursor.rows_fetched(),
-        })
     }
 
     /// Helper to read a DATA response, handling control and marker packets.
@@ -531,11 +504,26 @@ impl Connection {
     pub(crate) fn _capabilities(&self) -> &Capabilities {
         &self.caps
     }
+
+    // --- Low-level packet I/O for Cursor use ---
+
+    /// Send a data message and read the response packet.
+    ///
+    /// Handles control/marker packets internally.
+    /// This is used by RowCursor for fetch operations.
+    pub(crate) async fn send_message_and_read_response<M>(&mut self, message: &M) -> Result<Packet>
+    where
+        M: DataMessage + Message,
+    {
+        self.stream.send_data_message(message).await?;
+        self.read_data_response().await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_connect_params_parse() {
@@ -558,5 +546,24 @@ mod tests {
         assert!(cs.contains("HOST=myhost"));
         assert!(cs.contains("PORT=1521"));
         assert!(cs.contains("SERVICE_NAME=MYSERVICE"));
+    }
+
+    #[test]
+    fn test_connect_params_default_timeout() {
+        let params = ConnectParams::new("localhost", 1521, "ORCL");
+        assert_eq!(params.connect_timeout, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn test_connect_params_custom_timeout() {
+        let params = ConnectParams::new("localhost", 1521, "ORCL")
+            .with_connect_timeout(Duration::from_secs(5));
+        assert_eq!(params.connect_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_connect_params_parse_preserves_default_timeout() {
+        let params = ConnectParams::parse("localhost:1521/ORCL").unwrap();
+        assert_eq!(params.connect_timeout, Duration::from_secs(20));
     }
 }

@@ -84,6 +84,18 @@ pub enum Error {
     /// Unsupported Oracle data type.
     #[error("Unsupported Oracle data type: {type_num}")]
     UnsupportedType { type_num: u8 },
+
+    /// Connection timed out during TCP connect.
+    #[error("Connection to {host}:{port} timed out after {timeout:?}")]
+    ConnectionTimeout {
+        host: String,
+        port: u16,
+        timeout: std::time::Duration,
+    },
+
+    /// DNS resolution failed.
+    #[error("Failed to resolve hostname '{hostname}': {message}")]
+    DnsResolutionFailed { hostname: String, message: String },
 }
 
 impl Error {

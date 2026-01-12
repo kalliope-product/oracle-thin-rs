@@ -196,13 +196,7 @@ impl PacketStream {
         let mut buf = Vec::with_capacity(total_size);
 
         // Write packet header
-        write_packet_header(
-            &mut buf,
-            packet_type,
-            0,
-            total_size,
-            self.use_large_sdu,
-        );
+        write_packet_header(&mut buf, packet_type, 0, total_size, self.use_large_sdu);
 
         // Write message content
         msg.write_to(&mut buf)?;
@@ -279,15 +273,18 @@ impl Capabilities {
 
         let mut compile_caps = vec![0u8; TNS_CCAP_MAX];
         compile_caps[TNS_CCAP_SQL_VERSION] = TNS_CCAP_SQL_VERSION_MAX;
-        compile_caps[TNS_CCAP_LOGON_TYPES] =
-            TNS_CCAP_O5LOGON | TNS_CCAP_O5LOGON_NP | TNS_CCAP_O7LOGON
-            | TNS_CCAP_O8LOGON_LONG_IDENTIFIER | TNS_CCAP_O9LOGON_LONG_PASSWORD;
+        compile_caps[TNS_CCAP_LOGON_TYPES] = TNS_CCAP_O5LOGON
+            | TNS_CCAP_O5LOGON_NP
+            | TNS_CCAP_O7LOGON
+            | TNS_CCAP_O8LOGON_LONG_IDENTIFIER
+            | TNS_CCAP_O9LOGON_LONG_PASSWORD;
         compile_caps[TNS_CCAP_FEATURE_BACKPORT] =
             TNS_CCAP_CTB_IMPLICIT_POOL | TNS_CCAP_CTB_OAUTH_MSG_ON_ERR;
         compile_caps[TNS_CCAP_FIELD_VERSION] = ttc_field_version;
         compile_caps[TNS_CCAP_SERVER_DEFINE_CONV] = 1;
         compile_caps[TNS_CCAP_DEQUEUE_WITH_SELECTOR] = 1;
-        compile_caps[TNS_CCAP_TTC1] = TNS_CCAP_FAST_BVEC | TNS_CCAP_END_OF_CALL_STATUS | TNS_CCAP_IND_RCD;
+        compile_caps[TNS_CCAP_TTC1] =
+            TNS_CCAP_FAST_BVEC | TNS_CCAP_END_OF_CALL_STATUS | TNS_CCAP_IND_RCD;
         compile_caps[TNS_CCAP_OCI1] = TNS_CCAP_FAST_SESSION_PROPAGATE | TNS_CCAP_APP_CTX_PIGGYBACK;
         compile_caps[TNS_CCAP_TDS_VERSION] = TNS_CCAP_TDS_VERSION_MAX;
         compile_caps[TNS_CCAP_RPC_VERSION] = TNS_CCAP_RPC_VERSION_MAX;
@@ -301,16 +298,22 @@ impl Capabilities {
             | TNS_CCAP_LOB_12C;
         compile_caps[TNS_CCAP_UB2_DTY] = 1;
         compile_caps[TNS_CCAP_LOB2] = TNS_CCAP_LOB2_QUASI | TNS_CCAP_LOB2_2GB_PREFETCH;
-        compile_caps[TNS_CCAP_TTC3] = TNS_CCAP_IMPLICIT_RESULTS | TNS_CCAP_BIG_CHUNK_CLR
-            | TNS_CCAP_KEEP_OUT_ORDER | TNS_CCAP_LTXID;
+        compile_caps[TNS_CCAP_TTC3] = TNS_CCAP_IMPLICIT_RESULTS
+            | TNS_CCAP_BIG_CHUNK_CLR
+            | TNS_CCAP_KEEP_OUT_ORDER
+            | TNS_CCAP_LTXID;
         compile_caps[TNS_CCAP_TTC2] = TNS_CCAP_ZLNP;
         compile_caps[TNS_CCAP_OCI2] = TNS_CCAP_DRCP;
         compile_caps[TNS_CCAP_CLIENT_FN] = TNS_CCAP_CLIENT_FN_MAX;
         compile_caps[TNS_CCAP_SESS_SIGNATURE_VERSION] = TNS_CCAP_FIELD_VERSION_12_2;
         compile_caps[TNS_CCAP_TTC4] = TNS_CCAP_INBAND_NOTIFICATION | TNS_CCAP_EXPLICIT_BOUNDARY;
-        compile_caps[TNS_CCAP_TTC5] = TNS_CCAP_VECTOR_SUPPORT | TNS_CCAP_TOKEN_SUPPORTED
-            | TNS_CCAP_PIPELINING_SUPPORT | TNS_CCAP_PIPELINING_BREAK | TNS_CCAP_TTC5_SESSIONLESS_TXNS;
-        compile_caps[TNS_CCAP_VECTOR_FEATURES] = TNS_CCAP_VECTOR_FEATURE_BINARY | TNS_CCAP_VECTOR_FEATURE_SPARSE;
+        compile_caps[TNS_CCAP_TTC5] = TNS_CCAP_VECTOR_SUPPORT
+            | TNS_CCAP_TOKEN_SUPPORTED
+            | TNS_CCAP_PIPELINING_SUPPORT
+            | TNS_CCAP_PIPELINING_BREAK
+            | TNS_CCAP_TTC5_SESSIONLESS_TXNS;
+        compile_caps[TNS_CCAP_VECTOR_FEATURES] =
+            TNS_CCAP_VECTOR_FEATURE_BINARY | TNS_CCAP_VECTOR_FEATURE_SPARSE;
         compile_caps[TNS_CCAP_OCI3] = TNS_CCAP_OCI3_OCSSYNC;
 
         let mut runtime_caps = vec![0u8; TNS_RCAP_MAX];
@@ -357,7 +360,11 @@ impl Capabilities {
     /// Adjust capabilities after protocol exchange.
     /// Note: Unlike a naive implementation that minimizes all values,
     /// Python only adjusts specific fields (mainly TNS_CCAP_FIELD_VERSION).
-    pub fn adjust_for_server_caps(&mut self, server_compile_caps: &[u8], server_runtime_caps: &[u8]) {
+    pub fn adjust_for_server_caps(
+        &mut self,
+        server_compile_caps: &[u8],
+        server_runtime_caps: &[u8],
+    ) {
         // Track server's actual field version - this determines what fields it sends
         if !server_compile_caps.is_empty() && server_compile_caps.len() > TNS_CCAP_FIELD_VERSION {
             let server_field_version = server_compile_caps[TNS_CCAP_FIELD_VERSION];

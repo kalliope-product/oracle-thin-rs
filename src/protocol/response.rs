@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::error::{Error, Result};
 use crate::protocol::buffer::ReadBuffer;
 use crate::protocol::constants::*;
-use crate::protocol::decode::decode_oracle_number;
+use crate::protocol::decode::{decode_oracle_date, decode_oracle_number};
 use crate::protocol::types::{ColumnInfo, ColumnMetadata, OracleValue, Row};
 
 /// Information extracted from error/end-of-call response.
@@ -72,6 +72,7 @@ pub fn parse_execute_response(
 
     while buf.remaining() > 0 && !end_of_response {
         let msg_type = buf.read_u8()?;
+        eprintln!("[DEBUG] msg_type={}, remaining={}", msg_type, buf.remaining());
 
         match msg_type {
             TNS_MSG_TYPE_DESCRIBE_INFO => {
@@ -87,14 +88,16 @@ pub fn parse_execute_response(
             }
             TNS_MSG_TYPE_ROW_DATA => {
                 // column_info should be set after DESCRIBE_INFO
-                let info = column_info.clone().ok_or_else(|| {
-                    Error::protocol("Row data received before column metadata")
-                })?;
+                let info = column_info
+                    .clone()
+                    .ok_or_else(|| Error::protocol("Row data received before column metadata"))?;
                 parse_row_data(buf, &response.columns, info, &mut response.rows)?;
             }
             TNS_MSG_TYPE_ERROR => {
                 // Use server's field version to determine error info format
                 parse_error_info(buf, &mut response.error_info, server_ttc_field_version)?;
+                eprintln!("[DEBUG] error_info: error_num={}, cursor_id={}, row_count={}",
+                    response.error_info.error_num, response.error_info.cursor_id, response.error_info.row_count);
             }
             TNS_MSG_TYPE_END_OF_RESPONSE => {
                 end_of_response = true;
@@ -394,6 +397,11 @@ fn parse_column_value(buf: &mut ReadBuffer, col: &ColumnMetadata) -> Result<Orac
                 ORA_TYPE_NUM_NUMBER | ORA_TYPE_NUM_BINARY_INTEGER => {
                     let num_str = decode_oracle_number(&bytes)?;
                     Ok(OracleValue::Number(num_str))
+                }
+                // DATE
+                ORA_TYPE_NUM_DATE => {
+                    let dt = decode_oracle_date(&bytes)?;
+                    Ok(OracleValue::Date(dt))
                 }
                 // For other types, return as string for now
                 _ => {

@@ -7,8 +7,8 @@
 
 use crate::error::{Error, Result};
 use crate::protocol::constants::{
-    ORA_TYPE_NUM_BINARY_INTEGER, ORA_TYPE_NUM_CHAR, ORA_TYPE_NUM_LONG, ORA_TYPE_NUM_NUMBER,
-    ORA_TYPE_NUM_VARCHAR,
+    ORA_TYPE_NUM_BINARY_INTEGER, ORA_TYPE_NUM_BLOB, ORA_TYPE_NUM_CHAR, ORA_TYPE_NUM_CLOB,
+    ORA_TYPE_NUM_DATE, ORA_TYPE_NUM_LONG, ORA_TYPE_NUM_NUMBER, ORA_TYPE_NUM_VARCHAR,
 };
 
 /// Oracle data type with type-specific attributes.
@@ -24,6 +24,14 @@ pub enum OracleType {
     Long,
     /// CHAR(size) - fixed-length string.
     Char { max_size: u32 },
+    /// DATE - date/time (no timezone).
+    Date,
+    /// CLOB - Character Large Object.
+    Clob,
+    /// NCLOB - National Character Large Object.
+    Nclob,
+    /// BLOB - Binary Large Object.
+    Blob,
 }
 
 impl OracleType {
@@ -37,6 +45,9 @@ impl OracleType {
             ORA_TYPE_NUM_BINARY_INTEGER => Ok(OracleType::BinaryInteger),
             ORA_TYPE_NUM_LONG => Ok(OracleType::Long),
             ORA_TYPE_NUM_CHAR => Ok(OracleType::Char { max_size }),
+            ORA_TYPE_NUM_DATE => Ok(OracleType::Date),
+            ORA_TYPE_NUM_CLOB => Ok(OracleType::Clob),
+            ORA_TYPE_NUM_BLOB => Ok(OracleType::Blob),
             _ => Err(Error::UnsupportedType {
                 type_num: oracle_type,
             }),
@@ -51,6 +62,9 @@ impl OracleType {
             OracleType::BinaryInteger => ORA_TYPE_NUM_BINARY_INTEGER as u8,
             OracleType::Long => ORA_TYPE_NUM_LONG as u8,
             OracleType::Char { .. } => ORA_TYPE_NUM_CHAR as u8,
+            OracleType::Date => ORA_TYPE_NUM_DATE as u8,
+            OracleType::Clob | OracleType::Nclob => ORA_TYPE_NUM_CLOB as u8,
+            OracleType::Blob => ORA_TYPE_NUM_BLOB as u8,
         }
     }
 
@@ -96,6 +110,10 @@ impl std::fmt::Display for OracleType {
             OracleType::BinaryInteger => write!(f, "BINARY_INTEGER"),
             OracleType::Long => write!(f, "LONG"),
             OracleType::Char { max_size } => write!(f, "CHAR({})", max_size),
+            OracleType::Date => write!(f, "DATE"),
+            OracleType::Clob => write!(f, "CLOB"),
+            OracleType::Nclob => write!(f, "NCLOB"),
+            OracleType::Blob => write!(f, "BLOB"),
         }
     }
 }
@@ -113,7 +131,13 @@ mod tests {
     #[test]
     fn test_from_raw_number() {
         let t = OracleType::from_raw(ORA_TYPE_NUM_NUMBER as u8, 10, 2, 0);
-        assert_eq!(t.unwrap(), OracleType::Number { precision: 10, scale: 2 });
+        assert_eq!(
+            t.unwrap(),
+            OracleType::Number {
+                precision: 10,
+                scale: 2
+            }
+        );
     }
 
     #[test]
@@ -133,20 +157,39 @@ mod tests {
             ORA_TYPE_NUM_VARCHAR as u8
         );
         assert_eq!(
-            OracleType::Number { precision: 5, scale: 2 }.type_num(),
+            OracleType::Number {
+                precision: 5,
+                scale: 2
+            }
+            .type_num(),
             ORA_TYPE_NUM_NUMBER as u8
         );
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", OracleType::Varchar2 { max_size: 50 }), "VARCHAR2(50)");
         assert_eq!(
-            format!("{}", OracleType::Number { precision: 10, scale: 2 }),
+            format!("{}", OracleType::Varchar2 { max_size: 50 }),
+            "VARCHAR2(50)"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                OracleType::Number {
+                    precision: 10,
+                    scale: 2
+                }
+            ),
             "NUMBER(10,2)"
         );
         assert_eq!(
-            format!("{}", OracleType::Number { precision: 0, scale: 0 }),
+            format!(
+                "{}",
+                OracleType::Number {
+                    precision: 0,
+                    scale: 0
+                }
+            ),
             "NUMBER"
         );
     }

@@ -2,12 +2,35 @@
 //!
 //! Run with: cargo test --test test_19c
 
-use oracle_thin_rs::{Connection, OracleValue};
+use oracle_thin_rs::{Connection, Cursor, OracleValue};
+use std::env;
 
-/// Connection string for Oracle 19c RDS.
-const CONN_STR: &str = "test-oracle-19c.ctgcsik2itm5.ap-southeast-1.rds.amazonaws.com:1521/pdb1";
-const USERNAME: &str = "admin";
-const PASSWORD: &str = "ThisIsASecret123";
+/// Load environment variables from tests/.env file.
+fn load_env() {
+    let _ = dotenvy::from_path("tests/.env");
+}
+
+/// Get connection string from environment variables.
+fn get_conn_str() -> String {
+    load_env();
+    let host = env::var("ORACLE_19C_HOST").expect("ORACLE_19C_HOST must be set");
+    let port = env::var("ORACLE_19C_PORT").unwrap_or_else(|_| "1521".to_string());
+    let service = env::var("ORACLE_19C_SERVICE").unwrap_or_else(|_| "pdb1".to_string());
+    format!("{}:{}/{}", host, port, service)
+}
+
+/// Get username from environment variables.
+fn get_username() -> String {
+    load_env();
+    env::var("ORACLE_19C_USERNAME").unwrap_or_else(|_| "admin".to_string())
+}
+
+/// Get password from environment variables.
+fn get_password() -> String {
+    load_env();
+    env::var("ORACLE_19C_PASSWORD")
+        .expect("ORACLE_19C_PASSWORD must be set in tests/.env or environment")
+}
 
 /// Helper macro to handle connection errors gracefully.
 /// If Oracle is not reachable, skip the test instead of failing.
@@ -29,7 +52,7 @@ macro_rules! connect_or_skip {
 
 #[tokio::test]
 async fn test_connect() {
-    let conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     println!("Connected successfully!");
     println!("Protocol version: {}", conn.protocol_version());
@@ -49,7 +72,7 @@ async fn test_connect() {
 
 #[tokio::test]
 async fn test_query_string() {
-    let mut conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     let result = conn.query("SELECT 'hello' FROM DUAL").await.unwrap();
 
@@ -68,7 +91,7 @@ async fn test_query_string() {
 
 #[tokio::test]
 async fn test_query_table() {
-    let mut conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     let result = conn
         .query("SELECT ID, STR_COL, INT_COL, DEC_COL FROM TEST_DATA WHERE ROWNUM < 2")
@@ -126,7 +149,7 @@ async fn test_query_table() {
 
 #[tokio::test]
 async fn test_query_null_values() {
-    let mut conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     let result = conn
         .query(
@@ -142,8 +165,14 @@ async fn test_query_null_values() {
 
     // Check column metadata
     let columns = &result.columns;
-    assert_eq!(columns[0].oracle_type, 1, "NULL_STR should be VARCHAR2 type (1)");
-    assert_eq!(columns[1].oracle_type, 2, "NULL_NUM should be NUMBER type (2)");
+    assert_eq!(
+        columns[0].oracle_type, 1,
+        "NULL_STR should be VARCHAR2 type (1)"
+    );
+    assert_eq!(
+        columns[1].oracle_type, 2,
+        "NULL_NUM should be NUMBER type (2)"
+    );
 
     let row = &result.rows[0];
 
@@ -169,25 +198,25 @@ async fn test_query_null_values() {
 
 #[tokio::test]
 async fn test_cursor_fetch() {
-    let mut conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     // Open cursor with small fetch size to force multiple fetches
     let mut cursor = conn
-        .open_cursor_with_fetch_size(
+        .open_row_cursor(
             "SELECT ID, STR_COL, INT_COL, DEC_COL FROM TEST_DATA ORDER BY ID",
             100,
         )
         .await
         .unwrap();
 
-    println!("Cursor opened, columns: {:?}", cursor.column_names());
-    assert_eq!(cursor.buffered_count(), 100, "Should have 100 prefetched rows");
+    let column_names: Vec<_> = cursor.columns().iter().map(|c| c.name.as_str()).collect();
+    println!("Cursor opened, columns: {:?}", column_names);
 
     // Count all rows
     let mut row_count = 0;
     let mut last_id = 0i64;
 
-    while let Some(row) = conn.next_row(&mut cursor).await.unwrap() {
+    while let Some(row) = cursor.next().await.unwrap() {
         row_count += 1;
 
         if let Some(OracleValue::Number(id_str)) = row.get(0) {
@@ -199,42 +228,47 @@ async fn test_cursor_fetch() {
 
     println!("Total rows: {}", row_count);
     assert_eq!(row_count, 5000, "Should have 5000 rows");
-    assert!(cursor.is_exhausted(), "Cursor should be exhausted");
+    assert!(!cursor.has_more(), "Cursor should be exhausted");
+    assert!(cursor.is_closed(), "Cursor should be closed");
 
+    drop(cursor);
     conn.close().await.unwrap();
 }
 
 #[tokio::test]
 async fn test_fetch_all() {
-    let mut conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     let mut cursor = conn
-        .open_cursor_with_fetch_size(
+        .open_row_cursor(
             "SELECT ID, STR_COL FROM TEST_DATA WHERE ID <= 500 ORDER BY ID",
             50,
         )
         .await
         .unwrap();
 
-    let collected = conn.fetch_all(&mut cursor).await.unwrap();
+    let rows = cursor.fetch_all().await.unwrap();
 
-    println!("Collected {} rows", collected.len());
-    assert_eq!(collected.len(), 500, "Should collect 500 rows");
+    println!("Collected {} rows", rows.len());
+    assert_eq!(rows.len(), 500, "Should collect 500 rows");
 
     // Verify first and last rows
-    if let Some(OracleValue::Number(first_id)) = collected.rows[0].get(0) {
+    if let Some(OracleValue::Number(first_id)) = rows[0].get(0) {
         assert_eq!(first_id, "1", "First row should have ID=1");
     }
-    if let Some(OracleValue::Number(last_id)) = collected.rows[499].get(0) {
+    if let Some(OracleValue::Number(last_id)) = rows[499].get(0) {
         assert_eq!(last_id, "500", "Last row should have ID=500");
     }
 
+    assert!(cursor.is_closed(), "Cursor should be closed after fetch_all");
+
+    drop(cursor);
     conn.close().await.unwrap();
 }
 
 #[tokio::test]
 async fn test_sql_syntax_error() {
-    let mut conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     // Invalid SQL statement
     let result = conn.query("SELEKT * FROM DUAL").await;
@@ -252,7 +286,7 @@ async fn test_sql_syntax_error() {
 
 #[tokio::test]
 async fn test_table_not_found_error() {
-    let mut conn = connect_or_skip!(Connection::connect(CONN_STR, USERNAME, PASSWORD).await);
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
 
     let result = conn.query("SELECT * FROM NON_EXISTENT_TABLE_12345").await;
 
@@ -267,3 +301,77 @@ async fn test_table_not_found_error() {
 
     conn.close().await.unwrap();
 }
+
+// ============================================================================
+// Stream Tests (Phase 2)
+// ============================================================================
+
+#[tokio::test]
+async fn test_cursor_stream_basic() {
+    use oracle_thin_rs::CursorStreamExt;
+    use futures::stream::TryStreamExt;
+
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
+
+    let cursor = conn
+        .open_cursor(
+            "SELECT ID FROM TEST_DATA WHERE ID <= 10 ORDER BY ID",
+        )
+        .await
+        .unwrap();
+
+    let count = cursor
+        .into_stream()
+        .map_ok(|_| 1usize)
+        .try_fold(0, |acc, x| async move { Ok(acc + x) })
+        .await
+        .unwrap();
+
+    assert_eq!(count, 10);
+}
+
+#[tokio::test]
+async fn test_cursor_stream_collect() {
+    use oracle_thin_rs::CursorStreamExt;
+    use futures::stream::TryStreamExt;
+
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
+
+    let cursor = conn
+        .open_cursor(
+            "SELECT ID FROM TEST_DATA WHERE ID <= 5 ORDER BY ID",
+        )
+        .await
+        .unwrap();
+
+    let rows: Vec<_> = cursor.into_stream().try_collect().await.unwrap();
+
+    assert_eq!(rows.len(), 5);
+}
+
+#[tokio::test]
+async fn test_cursor_stream_take() {
+    use oracle_thin_rs::CursorStreamExt;
+    use futures::stream::{StreamExt, TryStreamExt};
+
+    let mut conn = connect_or_skip!(Connection::connect(&get_conn_str(), &get_username(), &get_password()).await);
+
+    let cursor = conn
+        .open_cursor(
+            "SELECT ID FROM TEST_DATA ORDER BY ID",
+        )
+        .await
+        .unwrap();
+
+    // Take only 5 rows from 5000
+    let count = cursor
+        .into_stream()
+        .take(5)
+        .map_ok(|_| 1usize)
+        .try_fold(0, |acc, x| async move { Ok(acc + x) })
+        .await
+        .unwrap();
+
+    assert_eq!(count, 5);
+}
+

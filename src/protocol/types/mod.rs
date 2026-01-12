@@ -1,13 +1,13 @@
 //! Oracle data types for query results.
 
-mod value;
-mod oracle_type;
 mod column;
 mod metadata;
+mod oracle_type;
 mod row;
+mod value;
 
-pub use value::OracleValue;
-pub use oracle_type::OracleType;
 pub use column::{Column, ColumnInfo};
 pub use metadata::ColumnMetadata;
+pub use oracle_type::OracleType;
 pub use row::Row;
+pub use value::OracleValue;

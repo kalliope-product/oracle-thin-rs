@@ -460,7 +460,17 @@ mod tests {
         let mut buf = Vec::new();
 
         // Test UB4 values
-        for val in [0u32, 1, 255, 256, 65535, 65536, 0xFFFFFF, 0x1000000, u32::MAX] {
+        for val in [
+            0u32,
+            1,
+            255,
+            256,
+            65535,
+            65536,
+            0xFFFFFF,
+            0x1000000,
+            u32::MAX,
+        ] {
             buf.clear();
             buf.write_ub4(val);
             assert_eq!(

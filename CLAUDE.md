@@ -90,24 +90,49 @@ When creating/updating directives:
 
 ### Test Environments
 
-**Local (Oracle 23ai Free - Docker)**
+**Setup (First Time)**
 ```bash
+# 1. Create .env file from template
+cp tests/.env.example tests/.env
+# Edit tests/.env with your actual credentials
+
+# 2. Install Python dependencies for migrations
+pip install -r tests/scripts/requirements.txt
+
+# 3. Start Docker (23ai)
 cd tests && docker compose up -d
-```
-```
-Host: localhost:1521
-Service: FREEPDB1
-User: read_user
-Password: ThisIsASecret123
+
+# 4. Run migrations
+python tests/scripts/migrate.py --env 23ai
+python tests/scripts/migrate.py --env 19c  # if RDS accessible
 ```
 
-**RDS (Oracle 19c)**
-```
-Host: <rds-endpoint>
-Port: 1521
-Service: <service-name>
-User: <rds-user>
-Password: <from-secrets-manager>
+**Environment Variables (in tests/.env)**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORACLE_23AI_HOST` | localhost | Docker host |
+| `ORACLE_23AI_PORT` | 1521 | Docker port |
+| `ORACLE_23AI_SERVICE` | freepdb1 | PDB service name |
+| `ORACLE_23AI_USERNAME` | test_user | Created by migration |
+| `ORACLE_23AI_PASSWORD` | (required) | Must match ORACLE_PWD |
+| `ORACLE_19C_HOST` | (required) | RDS endpoint |
+| `ORACLE_19C_PORT` | 1521 | RDS port |
+| `ORACLE_19C_SERVICE` | pdb1 | PDB service name |
+| `ORACLE_19C_USERNAME` | admin | RDS master user |
+| `ORACLE_19C_PASSWORD` | (required) | RDS password |
+| `ORACLE_PWD` | (required) | Docker SYS password |
+
+**Migration Commands**
+```bash
+# Run all pending migrations
+python tests/scripts/migrate.py --env 23ai
+
+# Check migration status
+python tests/scripts/migrate.py --env 23ai --status
+
+# Force re-run a specific migration
+python tests/scripts/migrate.py --env 23ai --force 001_create_sample_datatypes
 ```
 
 ### Commands
@@ -115,9 +140,10 @@ Password: <from-secrets-manager>
 # Run all tests (defaults to local 23ai)
 cargo test
 
-# Debug specific test
-cargo test --test integration_test -- --nocapture
+# Run specific test file
+cargo test --test test_23ai
+cargo test --test test_19c
 
-# Test against 19c RDS (set env vars first)
-ORACLE_HOST=<rds-endpoint> ORACLE_USER=<user> ORACLE_PASS=<pass> cargo test
+# Debug specific test
+cargo test --test test_19c -- --nocapture
 ```

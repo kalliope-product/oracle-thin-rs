@@ -1,3 +1,8 @@
 /target
 /python-ref
 /tmp
+
+# Environment files with credentials
+.env
+tests/.env
+*.env.local

@@ -1,12 +1,11 @@
 //! Authentication-related TNS messages.
 
+use super::data_types;
 use crate::error::Result;
 use crate::protocol::constants::*;
 use crate::protocol::message::{
-    bytes_with_length_wire_size, key_value_wire_size, ub4_wire_size, DataMessage, Message,
-    WriteExt,
+    bytes_with_length_wire_size, key_value_wire_size, ub4_wire_size, DataMessage, Message, WriteExt,
 };
-use super::data_types;
 
 // ============================================================================
 // AuthPhaseOneMessage - Authentication Phase 1 (TNS_FUNC_AUTH_PHASE_ONE)

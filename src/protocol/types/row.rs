@@ -121,10 +121,7 @@ mod tests {
         );
 
         assert_eq!(row.len(), 2);
-        assert_eq!(
-            row.get(0),
-            Some(&OracleValue::String("test".to_string()))
-        );
+        assert_eq!(row.get(0), Some(&OracleValue::String("test".to_string())));
         assert_eq!(
             row.get_by_name("value"),
             Some(&OracleValue::Number("42".to_string()))
