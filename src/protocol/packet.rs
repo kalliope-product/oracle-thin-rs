@@ -5,7 +5,7 @@ use crate::protocol::buffer::WriteBuffer;
 use crate::protocol::constants::*;
 use crate::protocol::message::{write_packet_header, DataMessage, Message};
 use bytes::{Bytes, BytesMut};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 /// TNS packet header size.
@@ -20,6 +20,8 @@ pub struct Packet {
     pub packet_flags: u8,
     /// Packet payload (excluding header).
     pub payload: Bytes,
+    /// More data
+    pub more_data: bool
 }
 
 impl Packet {
@@ -29,6 +31,7 @@ impl Packet {
             packet_type,
             packet_flags: 0,
             payload,
+            more_data: false
         }
     }
 
@@ -38,6 +41,7 @@ impl Packet {
             packet_type,
             packet_flags,
             payload,
+            more_data: false
         }
     }
 
@@ -87,6 +91,40 @@ pub struct PacketStream {
     sdu: u32,
     /// Partial buffer for incomplete packets.
     partial_buf: BytesMut,
+}
+
+fn debug_packet(packet_type: u8, data: &[u8], sending: bool) {
+    // if char_byte.isprintable() and byte_val < 128 \
+    //                     and char_byte != " ":
+    //                 printable_values.append(char_byte)
+    //             else:
+    //                 printable_values.append(".")
+    let keyword = if sending { "Sending" } else { "Received" };
+    eprintln!("[DEBUG] {} Packet Type {} ({} bytes):", keyword, packet_type, data.len());
+    for (i, chunk) in data.chunks(8).enumerate() {
+        eprint!("{:04}: ", i * 8);
+        for byte in chunk {
+            eprint!("{:02X} ", byte);
+        }
+        // Pad if less than 8 bytes
+        for _ in 0..(8 - chunk.len()) {
+            eprint!("   ");
+        }
+        eprint!("|");
+        for byte in chunk {
+            let ch = *byte as char;
+            if ch.is_ascii_graphic() && ch != ' ' {
+                eprint!("{}", ch);
+            } else {
+                eprint!(".");
+            }
+        }
+        // Pad if less than 8 bytes
+        for _ in 0..(8 - chunk.len()) {
+            eprint!(" ");
+        }
+        eprintln!("|");
+    }
 }
 
 impl PacketStream {
@@ -158,11 +196,17 @@ impl PacketStream {
         let packet_type = packet_data[4];
         let packet_flags = packet_data[5];
         let payload = Bytes::copy_from_slice(&packet_data[HEADER_SIZE..]);
-
+        // 81 bytes seem to be overhead
+        let maybe_more_data = self.partial_buf.len() > 0 || (packet_len as u32) >= (self.sdu - 81);
+        // self.prefetch_available().await?;
+        // More data available
+        // Relied on partial_buf was a bad idea, how to improve throughput without sacrifice performance?
+        debug_packet(packet_type, &packet_data, false);
         Ok(Packet {
             packet_type,
             packet_flags,
             payload,
+            more_data: maybe_more_data
         })
     }
 
@@ -200,7 +244,7 @@ impl PacketStream {
 
         // Write message content
         msg.write_to(&mut buf)?;
-
+        // debug_packet(packet_type, &buf, true);
         self.stream.write_all(&buf).await?;
         self.stream.flush().await?;
         Ok(())
@@ -229,7 +273,7 @@ impl PacketStream {
 
         // Write message content
         msg.write_to(&mut buf)?;
-        // eprintln!("[DEBUG] Sending DATA message with size {}", buf.len());
+        // debug_packet(TNS_PACKET_TYPE_DATA, &buf, true);
         self.stream.write_all(&buf).await?;
         self.stream.flush().await?;
         Ok(())

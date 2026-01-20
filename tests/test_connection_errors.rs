@@ -1,13 +1,13 @@
 //! Integration tests for connection timeout and DNS error handling.
 
-use oracle_thin_rs::{Connection, ConnectParams, Error};
+use oracle_thin_rs::{ConnectParams, Connection, Error};
 use std::time::{Duration, Instant};
 
 #[tokio::test]
 async fn test_connection_timeout_unreachable_host() {
     // 192.0.2.1 is a TEST-NET address that should be unreachable (RFC 5737)
-    let params = ConnectParams::new("192.0.2.1", 1521, "ORCL")
-        .with_connect_timeout(Duration::from_secs(2));
+    let params =
+        ConnectParams::new("192.0.2.1", 1521, "ORCL").with_connect_timeout(Duration::from_secs(2));
 
     let start = Instant::now();
     let result = Connection::connect_with_params(&params, "user", "pass").await;
@@ -81,7 +81,7 @@ async fn test_default_timeout_is_20_seconds() {
 
 #[tokio::test]
 async fn test_custom_timeout_via_builder() {
-    let params = ConnectParams::new("localhost", 1521, "ORCL")
-        .with_connect_timeout(Duration::from_secs(10));
+    let params =
+        ConnectParams::new("localhost", 1521, "ORCL").with_connect_timeout(Duration::from_secs(10));
     assert_eq!(params.connect_timeout, Duration::from_secs(10));
 }

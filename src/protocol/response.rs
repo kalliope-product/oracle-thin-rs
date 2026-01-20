@@ -64,15 +64,20 @@ pub fn parse_execute_response(
     buf: &mut ReadBuffer,
     ttc_field_version: u8,
     server_ttc_field_version: u8,
+    columns: Option<Vec<ColumnMetadata>>,
 ) -> Result<ExecuteResponse> {
     let mut response = ExecuteResponse::new();
     let mut end_of_response = false;
     let mut num_columns: usize = 0;
     let mut column_info: Option<Arc<ColumnInfo>> = None;
-
+    if let Some(columns) = columns {
+        num_columns = columns.len();
+        response.columns = columns;
+        column_info = Some(Arc::new(ColumnInfo::from_metadata(&response.columns)?));
+    }
     while buf.remaining() > 0 && !end_of_response {
         let msg_type = buf.read_u8()?;
-        eprintln!("[DEBUG] msg_type={}, remaining={}", msg_type, buf.remaining());
+        // eprintln!("[DEBUG] msg_type={}, remaining={}", msg_type, buf.remaining());
 
         match msg_type {
             TNS_MSG_TYPE_DESCRIBE_INFO => {
@@ -96,8 +101,8 @@ pub fn parse_execute_response(
             TNS_MSG_TYPE_ERROR => {
                 // Use server's field version to determine error info format
                 parse_error_info(buf, &mut response.error_info, server_ttc_field_version)?;
-                eprintln!("[DEBUG] error_info: error_num={}, cursor_id={}, row_count={}",
-                    response.error_info.error_num, response.error_info.cursor_id, response.error_info.row_count);
+                // eprintln!("[DEBUG] error_info: error_num={}, cursor_id={}, row_count={}",
+                //     response.error_info.error_num, response.error_info.cursor_id, response.error_info.row_count);
             }
             TNS_MSG_TYPE_END_OF_RESPONSE => {
                 end_of_response = true;
@@ -132,6 +137,11 @@ pub fn parse_execute_response(
     // Error 1403 (ORA-01403: no data found) means no more rows
     if response.error_info.error_num == 0 || response.error_info.error_num == 1403 {
         response.more_rows = response.error_info.error_num == 0;
+    } else {
+        return Err(Error::Oracle {
+            code: response.error_info.error_num,
+            message: response.error_info.message.unwrap_or_default(),
+        });
     }
 
     Ok(response)
@@ -369,9 +379,9 @@ fn parse_row_data(
     rows: &mut Vec<Row>,
 ) -> Result<()> {
     let mut values = Vec::with_capacity(columns.len());
-
     for col in columns {
         let value = parse_column_value(buf, col)?;
+        // eprintln!("[DEBUG] Parsed column '{}' value: {:?}", col.name, value);
         values.push(value);
     }
 
@@ -381,32 +391,62 @@ fn parse_row_data(
 
 /// Parse a single column value.
 fn parse_column_value(buf: &mut ReadBuffer, col: &ColumnMetadata) -> Result<OracleValue> {
-    // Read length-prefixed data
-    let data = buf.read_bytes_with_length()?;
+    let ora_type = col.oracle_type as u16;
 
-    match data {
-        None => Ok(OracleValue::Null),
-        Some(bytes) => {
-            match col.oracle_type as u16 {
-                // VARCHAR2, CHAR, LONG
-                ORA_TYPE_NUM_VARCHAR | ORA_TYPE_NUM_CHAR | ORA_TYPE_NUM_LONG => {
-                    let s = String::from_utf8_lossy(&bytes).to_string();
-                    Ok(OracleValue::String(s))
-                }
-                // NUMBER, BINARY_INTEGER
-                ORA_TYPE_NUM_NUMBER | ORA_TYPE_NUM_BINARY_INTEGER => {
-                    let num_str = decode_oracle_number(&bytes)?;
-                    Ok(OracleValue::Number(num_str))
-                }
-                // DATE
-                ORA_TYPE_NUM_DATE => {
-                    let dt = decode_oracle_date(&bytes)?;
-                    Ok(OracleValue::Date(dt))
-                }
-                // For other types, return as string for now
-                _ => {
-                    let s = String::from_utf8_lossy(&bytes).to_string();
-                    Ok(OracleValue::String(s))
+    // Handle LOB types specially - they use read_lob_with_length format
+    match ora_type {
+        ORA_TYPE_NUM_CLOB => {
+            let lob_value = buf.read_lob_with_length(false, col.buffer_size > 112, true)?;
+            match lob_value {
+                Some(lob) => Ok(OracleValue::Clob(lob)),
+                None => Ok(OracleValue::Null),
+            }
+        }
+        ORA_TYPE_NUM_BLOB => {
+            let lob_value = buf.read_lob_with_length(false, col.buffer_size > 112, false)?;
+            match lob_value {
+                Some(lob) => Ok(OracleValue::Blob(lob)),
+                None => Ok(OracleValue::Null),
+            }
+        }
+        ORA_TYPE_NUM_BFILE => {
+            // BFILE is read with is_bfile=true (no size/chunk_size metadata)
+            let lob_value = buf.read_lob_with_length(true, false, false)?;
+            match lob_value {
+                Some(lob) => Ok(OracleValue::Blob(lob)), // BFILE treated as BLOB
+                None => Ok(OracleValue::Null),
+            }
+        }
+        // All other types use read_bytes_with_length
+        _ => {
+            let data = buf.read_bytes_with_length()?;
+            match data {
+                None => Ok(OracleValue::Null),
+                Some(bytes) => {
+                    match ora_type {
+                        // VARCHAR2, CHAR, LONG
+                        ORA_TYPE_NUM_VARCHAR | ORA_TYPE_NUM_CHAR | ORA_TYPE_NUM_LONG => {
+                            let s = String::from_utf8_lossy(&bytes).to_string();
+                            Ok(OracleValue::String(s))
+                        }
+                        // NUMBER, BINARY_INTEGER
+                        ORA_TYPE_NUM_NUMBER | ORA_TYPE_NUM_BINARY_INTEGER => {
+                            let num_str = decode_oracle_number(&bytes)?;
+                            Ok(OracleValue::Number(num_str))
+                        }
+                        // DATE
+                        ORA_TYPE_NUM_DATE => {
+                            let dt = decode_oracle_date(&bytes)?;
+                            Ok(OracleValue::Date(dt))
+                        }
+                        // RAW
+                        ORA_TYPE_NUM_RAW => Ok(OracleValue::Raw(bytes.to_vec())),
+                        // For other types, return as string for now
+                        _ => {
+                            let s = String::from_utf8_lossy(&bytes).to_string();
+                            Ok(OracleValue::String(s))
+                        }
+                    }
                 }
             }
         }

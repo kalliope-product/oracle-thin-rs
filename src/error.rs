@@ -2,6 +2,7 @@
 
 use std::io;
 use thiserror::Error;
+use std::panic::Location;
 
 /// Result type alias for Oracle operations.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -74,8 +75,8 @@ pub enum Error {
     NullValue { column: String },
 
     /// Buffer too small.
-    #[error("Buffer too small: need {needed} bytes, have {available}")]
-    BufferTooSmall { needed: usize, available: usize },
+    #[error("Buffer too small: need {needed} bytes, have {available} filed at {location}")]
+    BufferTooSmall { needed: usize, available: usize, location: &'static Location<'static> },
 
     /// Invalid connect string.
     #[error("Invalid connect string: {message}")]

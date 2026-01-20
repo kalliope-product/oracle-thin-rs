@@ -197,6 +197,7 @@ fn handle_accept(packet: Packet, stream: &mut PacketStream, caps: &mut Capabilit
 
     // Read SDU
     let sdu = buf.read_u32_be()?;
+    eprintln!("Server SDU size: {}", sdu);
     caps.sdu = sdu;
     stream.set_sdu(sdu);
 

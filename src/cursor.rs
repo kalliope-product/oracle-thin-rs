@@ -350,17 +350,13 @@ impl<C: Cursor + Unpin> CursorStreamExt for C {
     fn into_stream(self) -> impl Stream<Item = Result<Self::Item>> {
         use futures::stream;
 
-        stream::unfold(
-            Some(self),
-            |opt_cursor| async move {
-                let mut cursor = opt_cursor?;
-                match cursor.next().await {
-                    Ok(Some(item)) => Some((Ok(item), Some(cursor))),
-                    Ok(None) => None,
-                    Err(e) => Some((Err(e), Some(cursor))),
-                }
-            },
-        )
+        stream::unfold(Some(self), |opt_cursor| async move {
+            let mut cursor = opt_cursor?;
+            match cursor.next().await {
+                Ok(Some(item)) => Some((Ok(item), Some(cursor))),
+                Ok(None) => None,
+                Err(e) => Some((Err(e), Some(cursor))),
+            }
+        })
     }
 }
-

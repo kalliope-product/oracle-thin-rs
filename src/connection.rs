@@ -11,7 +11,8 @@ use crate::protocol::message::Message;
 use crate::protocol::messages::{ExecuteMessage, MarkerMessage, TNS_MARKER_TYPE_RESET};
 use crate::protocol::packet::{Capabilities, Packet, PacketStream};
 use crate::protocol::response::parse_execute_response;
-use crate::protocol::types::{ColumnMetadata, Row};
+use crate::protocol::types::{build_fetch_vars_from_metadata, ColumnMetadata, Row};
+use bytes::BytesMut;
 use tokio::net::TcpStream;
 
 /// Result of a query execution.
@@ -157,7 +158,6 @@ impl Connection {
 
                     // Initialize capabilities
                     let mut caps = Capabilities::new();
-
                     // Perform TNS connect handshake
                     connect(&mut stream, params, &mut caps).await?;
 
@@ -271,55 +271,79 @@ impl Connection {
     /// }
     /// ```
     pub async fn query(&mut self, sql: &str) -> Result<QueryResult> {
-        // Default prefetch size
+        // Default prefetch size and LOB prefetch size
         let prefetch_rows = 100u32;
-
-        // Create execute message
-        let msg = ExecuteMessage::new_query(sql, prefetch_rows, self.caps.ttc_field_version);
-
-        // Debug: print the wire format and hex dump
-        let wire_size = crate::protocol::message::Message::wire_size(&msg);
-        // eprintln!("[DEBUG] Execute message wire size: {}", wire_size);
-        // eprintln!("[DEBUG] TTC field version: {}", self.caps.ttc_field_version);
-
-        // Serialize and dump hex
-        let mut debug_buf = Vec::with_capacity(wire_size);
-        crate::protocol::message::Message::write_to(&msg, &mut debug_buf)?;
-        // eprintln!("[DEBUG] Execute message hex ({} bytes):", debug_buf.len());
-        // for chunk in debug_buf.chunks(16) {
-        //     let hex: Vec<String> = chunk.iter().map(|b| format!("{:02X}", b)).collect();
-        //     eprintln!("  {}", hex.join(" "));
-        // }
-
-        // Send execute message
-        self.stream.send_data_message(&msg).await?;
-
-        // Read response, handling any control/marker packets
+        // Shared memory region for reading
+        // Step 1: normal query execution
+        // Step 2: parse response, if query end, have more rows=true and we have not read more rows, send DEFINE
+        // Step 3: get row data if possible
+        eprintln!("[QUERY] Step 1: Normal Query");
+        // Step 1: PARSE+EXECUTE (no FETCH) to get column metadata
+        let query_msg = ExecuteMessage::new_query(sql, prefetch_rows, self.caps.ttc_field_version);
+        self.stream.send_data_message(&query_msg).await?;
+        eprintln!("[QUERY] Step 1: Message sent, waiting for response...");
         let response = self.read_data_response().await?;
-
         let mut buf = ReadBuffer::new(response.payload);
         let _data_flags = buf.read_u16_be()?;
-
-        let exec_response = parse_execute_response(
+        let query_response = parse_execute_response(
             &mut buf,
             self.caps.ttc_field_version,
             self.caps.server_ttc_field_version,
+            None,
         )?;
-
-        // Check for Oracle errors
-        if exec_response.error_info.error_num != 0 && exec_response.error_info.error_num != 1403 {
-            return Err(Error::Oracle {
-                code: exec_response.error_info.error_num,
-                message: exec_response.error_info.message.unwrap_or_default(),
-            });
+        let cursor_id = query_response.error_info.cursor_id as u32;
+        let columns = query_response.columns;
+        if query_response.more_rows && query_response.rows.is_empty() {
+            eprintln!("[QUERY] Step 1: More rows indicated, but no rows fetched yet.");
+            // Move on to step 2, send DEFINE message
+            let lob_fetch_var = build_fetch_vars_from_metadata(&columns, 4000);
+            eprintln!("[QUERY] Step 2: DEFINE cursor_id={}", cursor_id);
+            let define_msg = ExecuteMessage::new_define(
+                cursor_id,
+                &lob_fetch_var,
+                prefetch_rows,
+                self.caps.ttc_field_version,
+            );
+            // Debug define_msg
+            self.stream.send_data_message(&define_msg).await?;
+            let mut buf = BytesMut::with_capacity(self._capabilities().sdu as usize);
+            loop {
+                let Packet { packet_type: _, packet_flags: _, payload, more_data } = self.read_data_response().await?;
+                let _data_flag = u16::from_be_bytes([payload[0], payload[1]]);
+                buf.extend_from_slice(&payload.slice(2..));
+                eprintln!("Received data {} {more_data}", payload.len());
+                if !more_data {
+                    break
+                }
+            }
+            eprintln!(
+                "[QUERY] Step 2: Response received, payload size={}",
+                buf.len()
+            );
+            // This one will error out if we try to process before try receiving more
+            // Either wait until all received to process more, causing a little delay (few ms)
+            let mut buf = ReadBuffer::new(buf.freeze());
+            let fetch_response = parse_execute_response(
+                &mut buf,
+                self.caps.ttc_field_version,
+                self.caps.server_ttc_field_version,
+                Some(columns.clone()),
+            )?;
+            Ok(QueryResult {
+                columns,
+                rows: fetch_response.rows,
+                row_count: fetch_response.error_info.row_count,
+                more_rows: fetch_response.more_rows,
+            })
+        } else {
+            eprintln!("[QUERY] Step 1: No more rows or rows already fetched.");
+            Ok(QueryResult {
+                columns,
+                rows: query_response.rows,
+                row_count: query_response.error_info.row_count,
+                more_rows: query_response.more_rows,
+            })
         }
-
-        Ok(QueryResult {
-            columns: exec_response.columns,
-            rows: exec_response.rows,
-            row_count: exec_response.error_info.row_count,
-            more_rows: exec_response.more_rows,
-        })
     }
 
     /// Open a row-by-row cursor for a SELECT query.
@@ -381,6 +405,7 @@ impl Connection {
             &mut buf,
             self.caps.ttc_field_version,
             self.caps.server_ttc_field_version,
+            None,
         )?;
 
         // Check for Oracle errors

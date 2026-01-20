@@ -191,6 +191,7 @@ pub const TNS_CCAP_FIELD_VERSION_19_1_EXT_1: u8 = 13;
 pub const TNS_CCAP_FIELD_VERSION_20_1: u8 = 14;
 pub const TNS_CCAP_FIELD_VERSION_21_1: u8 = 16;
 pub const TNS_CCAP_FIELD_VERSION_23_1: u8 = 17;
+pub const TNS_CCAP_FIELD_VERSION_23_1_EXT_1: u8 = 18;
 pub const TNS_CCAP_FIELD_VERSION_23_1_EXT_3: u8 = 20;
 pub const TNS_CCAP_FIELD_VERSION_23_4: u8 = 24;
 pub const TNS_CCAP_FIELD_VERSION_MAX: u8 = 24;
@@ -282,3 +283,28 @@ pub const ORA_TYPE_NUM_TIMESTAMP_TZ: u16 = 181;
 pub const ORA_TYPE_NUM_UROWID: u16 = 208;
 pub const ORA_TYPE_NUM_VARCHAR: u16 = 1;
 pub const ORA_TYPE_NUM_VECTOR: u16 = 127;
+
+// CS Form types
+pub const CS_FORM_IMPLICIT: u8 = 1;
+pub const CS_FORM_NCHAR: u8 = 2;
+
+// LOB prefetch constants
+/// LOB prefetch flag for cont_flag field in column metadata
+pub const TNS_LOB_PREFETCH_FLAG: u64 = 0x2000000;
+/// Default LOB prefetch size (1MB)
+pub const TNS_DEFAULT_LOB_PREFETCH_SIZE: u32 = 1048576;
+/// JSON maximum length for prefetch (32MB)
+pub const TNS_JSON_MAX_LENGTH: u32 = 33554432;
+/// Vector maximum length for prefetch (1MB)
+pub const TNS_VECTOR_MAX_LENGTH: u32 = 1048576;
+/// Maximum UROWID length
+pub const TNS_MAX_UROWID_LENGTH: u32 = 5267;
+
+// Fetch orientations
+pub const TNS_FETCH_ORIENTATION_ABSOLUTE: u32 = 0x20;
+pub const TNS_FETCH_ORIENTATION_CURRENT: u32 = 0x01;
+pub const TNS_FETCH_ORIENTATION_FIRST: u32 = 0x04;
+pub const TNS_FETCH_ORIENTATION_LAST: u32 = 0x08;
+pub const TNS_FETCH_ORIENTATION_NEXT: u32 = 0x02;
+pub const TNS_FETCH_ORIENTATION_PRIOR: u32 = 0x10;
+pub const TNS_FETCH_ORIENTATION_RELATIVE: u32 = 0x40;

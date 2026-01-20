@@ -1,5 +1,6 @@
 //! Oracle value types for query results.
 
+use super::LobValue;
 use chrono::NaiveDateTime;
 use std::fmt;
 
@@ -8,13 +9,21 @@ use std::fmt;
 pub enum OracleValue {
     /// NULL value.
     Null,
-    /// String value (VARCHAR2, CHAR, CLOB, etc.).
+    /// String value (VARCHAR2, CHAR, etc.).
     String(String),
     /// Number value as string (preserves precision).
     /// Can be converted to i64/f64 as needed.
     Number(String),
     /// Date/time value (DATE type).
     Date(NaiveDateTime),
+    /// CLOB value (Character Large Object).
+    /// May contain prefetched data or just a locator.
+    Clob(LobValue),
+    /// BLOB value (Binary Large Object).
+    /// May contain prefetched data or just a locator.
+    Blob(LobValue),
+    /// Raw binary value (RAW type).
+    Raw(Vec<u8>),
 }
 
 impl OracleValue {
@@ -55,6 +64,39 @@ impl OracleValue {
             _ => None,
         }
     }
+
+    /// Try to get the value as a CLOB.
+    pub fn as_clob(&self) -> Option<&LobValue> {
+        match self {
+            OracleValue::Clob(lob) => Some(lob),
+            _ => None,
+        }
+    }
+
+    /// Try to get the value as a BLOB.
+    pub fn as_blob(&self) -> Option<&LobValue> {
+        match self {
+            OracleValue::Blob(lob) => Some(lob),
+            _ => None,
+        }
+    }
+
+    /// Try to get the value as raw bytes.
+    pub fn as_raw(&self) -> Option<&[u8]> {
+        match self {
+            OracleValue::Raw(bytes) => Some(bytes),
+            OracleValue::Blob(lob) => lob.as_bytes(),
+            _ => None,
+        }
+    }
+
+    /// Get the string representation of a CLOB if data is prefetched.
+    pub fn clob_string(&self) -> Option<String> {
+        match self {
+            OracleValue::Clob(lob) => lob.as_string(),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for OracleValue {
@@ -64,6 +106,21 @@ impl fmt::Display for OracleValue {
             OracleValue::String(s) => write!(f, "{}", s),
             OracleValue::Number(n) => write!(f, "{}", n),
             OracleValue::Date(dt) => write!(f, "{}", dt.format("%Y-%m-%d %H:%M:%S")),
+            OracleValue::Clob(lob) => {
+                if let Some(data) = lob.as_string() {
+                    write!(f, "{}", data)
+                } else {
+                    write!(f, "<CLOB: {} bytes>", lob.size())
+                }
+            }
+            OracleValue::Blob(lob) => {
+                if let Some(data) = lob.as_bytes() {
+                    write!(f, "<BLOB: {} bytes>", data.len())
+                } else {
+                    write!(f, "<BLOB: {} bytes>", lob.size())
+                }
+            }
+            OracleValue::Raw(bytes) => write!(f, "<RAW: {} bytes>", bytes.len()),
         }
     }
 }
